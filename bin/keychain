@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+
+# =================================================================== #
+# Global Configuration
+# ------------------------------------------------------------------- #
+
+CLI_NAME="$(basename "$0")"
+[ -z "${KEYCHAINS_DIR}" ] && KEYCHAINS_DIR="${HOME}/Keychains"
+
+# =================================================================== #
+# Utility Functions
+# ------------------------------------------------------------------- #
+
+default_keychain() {
+  if [ -h "${KEYCHAINS_DIR}/.current.keychain" ]; then
+    readlink "${KEYCHAINS_DIR}/.current.keychain" | sed -E 's|^.+/(.+).keychain$|\1|g'
+  else
+    (cd "${KEYCHAINS_DIR}"; find * -type d -name '*.keychain' | head -1 | sed 's|.keychain||g')
+  fi
+}
+
+dim() {
+  echo -e "\x1B[90m$*\x1B[0m"
+}
+
+string_repeat() {
+  local STRING="$1"
+  local N="$2"
+  for i in $(seq 1 "${N}"); do
+    printf "${STRING}"
+  done
+}
+
+table_header() {
+  dim "┏━$(string_repeat "━" "$1")━┯━$(string_repeat "━" "$2")━┓"
+}
+
+table_row() {
+  echo -e "$(dim "┃") $1 $(dim "│") $2 $(dim "┃")"
+}
+
+table_divider() {
+  dim "┠─$(string_repeat "─" "$1")─┼─$(string_repeat "─" "$2")─┨"
+}
+
+table_footer() {
+  dim "┗━$(string_repeat "━" "$1")━┷━$(string_repeat "━" "$2")━┛"
+}
+
+table() {
+  local TABLE_TYPE="$1"
+  shift
+
+  local TABLE_STRING=""
+  local NAME_WIDTH="0"
+  local DESCRIPTION_WIDTH="0"
+
+  while [ $# -gt 0 ]; do
+    local NAME="$1"
+    local DESCRIPTION="$2"
+    shift 2
+
+    NAME_WIDTH="$(printf "${NAME}" | wc -c)"
+    DESCRIPTION_WIDTH="$(printf "${DESCRIPTION}" | wc -c)"
+
+    case "${TABLE_TYPE}" in
+      variable)
+        TABLE_STRING="${TABLE_STRING}$(table_row "$(format_variable "${NAME}")" "${DESCRIPTION}")\n"
+        ;;
+      enum)
+        TABLE_STRING="${TABLE_STRING}$(table_row "$(format_enum_value "${NAME}")" "${DESCRIPTION}")\n"
+        ;;
+      *)
+        TABLE_STRING="${TABLE_STRING}$(table_row "${NAME}" "${DESCRIPTION}")\n"
+        ;;
+    esac
+    if [ $# -gt 0 ]; then
+      TABLE_STRING="${TABLE_STRING}$(table_divider "${NAME_WIDTH}" "${DESCRIPTION_WIDTH}")\n"
+    fi
+  done
+  table_header "${NAME_WIDTH}" "${DESCRIPTION_WIDTH}"
+  echo -en "${TABLE_STRING}"
+  table_footer "${NAME_WIDTH}" "${DESCRIPTION_WIDTH}"
+}
+
+usage() {
+  echo -e "💻 $(format_command "${CLI_NAME}") $*"
+}
+
+format_command() {
+  echo -e "\x1B[32;1m$1\x1B[0m"
+}
+
+format_enum() {
+  while [ $# -gt 0 ]; do
+    echo -en "$(format_enum_value "$1")"
+    shift
+    if [ $# -gt 0 ]; then
+      printf '|'
+    fi
+  done
+}
+
+format_enum_value() {
+  echo -e "\x1B[36m$1\x1B[0m"
+}
+
+format_error() {
+  echo -e "⛔ \x1B[31;1m$1\x1B[0m"
+}
+
+format_success() {
+  echo -e "✅ $1"
+}
+
+format_key() {
+  echo -e "🔑 \x1B[33m$1\x1B[0m"
+}
+
+format_keychain() {
+  echo -e "🔐 \x1B[36m$1\x1B[0m"
+}
+
+format_variable() {
+  echo -e "\x1B[33m$1\x1B[0m"
+}
+
+# =================================================================== #
+# Commands
+# ------------------------------------------------------------------- #
+
+main() {
+  KEYCHAIN="$(default_keychain)"
+  KEYCHAIN_DIR="${KEYCHAINS_DIR}/${KEYCHAIN}.keychain"
+  KEYS_DIR="${KEYCHAIN_DIR}/keys"
+
+  local ACTION="$1"
+
+  shift
+
+  case "${ACTION}" in
+    keygen)
+      command_keygen $*
+      ;;
+    list)
+      command_list $*
+      ;;
+    manage)
+      command_manage $*
+      ;;
+    read)
+      command_read $*
+      ;;
+    write)
+      command_write $*
+      ;;
+    remove)
+      command_remove $*
+      ;;
+    use)
+      command_use $*
+      ;;
+    *)
+      >&2 cat <<EOF
+$(usage $(format_enum keygen list manage read remove use write))
+
+Interact with a keychain.
+
+$(table enum \
+  "keygen" "Generate a new password.         " \
+  "list  " "List all keys.                   " \
+  "manage" "Manage your keychains.           " \
+  "read  " "Read the value of a key.         " \
+  "remove" "Remove a key.                    " \
+  "use   " "Switch to using another keychain." \
+  "write " "Write the value of a key.        " \
+)
+
+EOF
+      exit 1
+      ;;
+  esac
+}
+
+command_manage() {
+  >&2 cat <<EOF
+$(usage manage $(format_enum create remove rename))
+
+Manage your keychains.
+
+$(table enum \
+  "create" "Create a new keychain.      " \
+  "remove" "Remove an existing keychain." \
+  "rename" "Rename an existing keychain." \
+)
+
+EOF
+}
+
+command_keygen() {
+  head -c 33 < /dev/urandom | base64
+}
+
+command_list_keychains() {
+  for KEYCHAIN in $(cd "${KEYCHAINS_DIR}"; find * -type d -name '*.keychain' | sed 's|.keychain||g' | xargs); do
+    echo "$(format_keychain "${KEYCHAIN}")$([ "$(default_keychain)" = "${KEYCHAIN}" ] && printf '*')"
+  done
+}
+
+command_list() {
+  format_keychain "${KEYCHAIN}"
+
+  for KEY in $(cd "${KEYS_DIR}"; find * -type f | xargs); do
+    echo -e "  $(format_key "${KEY}")"
+  done
+}
+
+command_read() {
+  local KEY="$1"
+
+  shift
+
+  local KEY_FILE="${KEYS_DIR}/${KEY}"
+
+  if [ -z "${KEY}" ]; then
+    >&2 cat <<EOF
+$(usage read $(format_variable key))
+
+Reads the value of the given key from the $(format_keychain "${KEYCHAIN}") keychain.
+
+$(table variable \
+  "key" "The key whose value to read." \
+)
+
+EOF
+    exit 1
+  fi
+
+  if [ ! -f "${KEY_FILE}" ]; then
+    >&2 cat <<EOF
+The key $(format_key "${KEY}") was not found in the $(format_keychain "${KEYCHAIN}") keychain.
+EOF
+    exit 1
+  fi
+
+  >&2 echo -e "$(format_keychain "${KEYCHAIN}") $(format_key "${KEY}")"
+  gpg --quiet --decrypt "${KEY_FILE}"
+}
+
+command_remove() {
+  local KEY="$1"
+
+  shift
+
+  local KEY_FILE="${KEYS_DIR}/${KEY}"
+
+  if [ -z "${KEY}" ]; then
+    2>&1 cat <<EOF
+$(usage remove $(format_variable key))
+
+Removes the given key from the $(format_keychain "${KEYCHAIN}") keychain.
+
+$(table variable \
+  "key" "The key to be removed from the keychain." \
+)
+
+EOF
+    exit 1
+  fi
+
+  rm -iv "${KEY_FILE}"
+}
+
+command_use() {
+  KEYCHAIN="$1"
+
+  if [ -z "${KEYCHAIN}" ]; then
+    >&2 cat <<EOF
+$(usage use $(format_variable keychain))
+
+Switch to using the given keychain.
+
+$(table variable \
+  "keychain" "The keychain to set as the default keychain." \
+)
+
+EOF
+    echo -e "\x1B[1mKeychains:\x1B[0m $(command_list_keychains | xargs)"
+    exit 1
+  fi
+
+  local REAL_KEYCHAIN_DIR="${KEYCHAINS_DIR}/${KEYCHAIN}.keychain"
+  local LINKED_KEYCHAIN_DIR="${KEYCHAINS_DIR}/.current.keychain"
+
+  if [ ! -d "${REAL_KEYCHAIN_DIR}" ]; then
+    >&2 cat <<EOF
+$(format_error "Not found:") ${KEYCHAIN}
+EOF
+    echo -e "\x1B[1mKeychains:\x1B[0m $(command_list_keychains | xargs)"
+    exit 1
+  fi
+
+  format_success "Set keychain $(format_keychain "${KEYCHAIN}") as default"
+
+  rm -f "${LINKED_KEYCHAIN_DIR}"
+  ln -s "${REAL_KEYCHAIN_DIR}" "${LINKED_KEYCHAIN_DIR}"
+}
+
+command_write() {
+  local KEY="$1"
+
+  shift
+
+  local KEY_FILE="${KEYS_DIR}/${KEY}"
+
+  if [ -z "${KEY}" ]; then
+    >&2 cat <<EOF
+$(usage write $(format_variable key) [$(format_variable ...gpg-args)])
+
+Writes from standard input to the given key within the $(format_keychain "${KEYCHAIN}") keychain.
+
+$(table variable \
+  "key     " "The key whose value to write.                         " \
+  "gpg-args" "Additional arguments to pass to gpg.                  " \
+)
+
+EOF
+    exit 1
+  fi
+
+  local TARGET_USER_ID="$(cd "${KEYCHAIN_DIR}"; find * -type f -name '*.key' | sed 's|.key||g')"
+
+  gpg \
+    --recipient "${TARGET_USER_ID}" \
+    --encrypt \
+    --output "${KEY_FILE}" \
+    $*
+}
+
+# =================================================================== #
+# Entry-point
+# ------------------------------------------------------------------- #
+
+main $*
