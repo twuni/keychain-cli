@@ -183,7 +183,15 @@ EOF
 }
 
 command_manage() {
-  >&2 cat <<EOF
+  local COMMAND_NAME="$1"
+  shift
+
+  case "${COMMAND_NAME}" in
+    create)
+      command_manage_create $*
+      ;;
+    *)
+      >&2 cat <<EOF
 $(usage manage $(format_enum create remove rename))
 
 Manage your keychains.
@@ -195,6 +203,47 @@ $(table enum \
 )
 
 EOF
+      exit 1
+      ;;
+  esac
+}
+
+command_manage_create() {
+  local KEYCHAIN_NAME="$1"
+
+  if [ -z "${KEYCHAIN_NAME}" ]; then
+    >&2 cat <<EOF
+$(usage manage create $(format_variable name))
+
+Create a new keychain with the given name.
+
+$(table variable \
+  "name" "The name of the keychain to create."
+)
+
+EOF
+    exit 1
+  fi
+
+  local KEYCHAIN_DIR="${KEYCHAINS_DIR}/${KEYCHAIN_NAME}.keychain"
+  local KEYCHAIN_EMAIL="$(echo "${KEYCHAIN_NAME}" | tr '[:upper:]' '[:lower:]')@keychain.local"
+
+  gpg --batch --full-generate-key <<EOF
+Key-Type: RSA
+Key-Length: 4096
+Key-Usage: encrypt, sign, auth
+Name-Real: ${KEYCHAIN_NAME} Keychain
+Name-Comment: Designated key for accessing the ${KEYCHAIN_NAME} keychain.
+Name-Email: ${KEYCHAIN_EMAIL}
+Expire-Date: 0
+%commit
+EOF
+
+  local KEYCHAIN_KEY_ID="$(gpg --list-secret-keys | grep -B1 "${KEYCHAIN_EMAIL}" | head -1 | tail -c 9)"
+
+  mkdir -p "${KEYCHAIN_DIR}/keys"
+  gpg --export-secret-key "${KEYCHAIN_KEY_ID}" > "${KEYCHAIN_DIR}/${KEYCHAIN_KEY_ID}.key"
+  chmod -fR go-rwx "${KEYCHAIN_DIR}"
 }
 
 command_keygen() {
