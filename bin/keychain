@@ -151,6 +151,9 @@ main() {
     read)
       command_read $*
       ;;
+    refresh)
+      command_refresh $*
+      ;;
     write)
       command_write $*
       ;;
@@ -162,18 +165,19 @@ main() {
       ;;
     *)
       >&2 cat <<EOF
-$(usage $(format_enum keygen list manage read remove use write))
+$(usage $(format_enum keygen list manage read refresh remove use write))
 
 Interact with a keychain.
 
 $(table enum \
-  "keygen" "Generate a new password.         " \
-  "list  " "List all keys.                   " \
-  "manage" "Manage your keychains.           " \
-  "read  " "Read the value of a key.         " \
-  "remove" "Remove a key.                    " \
-  "use   " "Switch to using another keychain." \
-  "write " "Write the value of a key.        " \
+  "keygen " "Generate a new password.         " \
+  "list   " "List all keys.                   " \
+  "manage " "Manage your keychains.           " \
+  "read   " "Read the value of a key.         " \
+  "refresh" "Re-encrypt all keys.             " \
+  "remove " "Remove a key.                    " \
+  "use    " "Switch to using another keychain." \
+  "write  " "Write the value of a key.        " \
 )
 
 EOF
@@ -248,6 +252,28 @@ EOF
 
 command_keygen() {
   head -c 33 < /dev/urandom | base64
+}
+
+command_refresh() {
+  format_keychain "${KEYCHAIN}"
+
+  local TARGET_USER_ID="$(cd "${KEYCHAIN_DIR}"; find * -type f -name '*.key' | sed 's|.key||g')"
+  local BACKUP_DIR="${KEYCHAIN_DIR}/backup"
+
+  for KEY in $(cd "${KEYS_DIR}"; find * -type f | xargs); do
+    local KEY_FILE="${KEYS_DIR}/${KEY}"
+    local BACKUP_FILE="${BACKUP_DIR}/${KEY}"
+
+    echo -e "  $(format_key "${KEY}") (re-encrypting)"
+
+    mkdir -p "${BACKUP_DIR}"
+    mv "${KEY_FILE}" "${BACKUP_FILE}"
+    gpg --quiet --decrypt "${BACKUP_FILE}" \
+    | gpg \
+      --recipient "${TARGET_USER_ID}" \
+      --encrypt \
+      --output "${KEY_FILE}"
+  done
 }
 
 command_list_keychains() {
